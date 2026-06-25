@@ -45,7 +45,7 @@ jobs:
         run: apt update && apt install -y zip unzip
       - name: Restore NuGet packages
         run: |
-          cd ./ACVP-Server
+          cd ./ACVP-Server/gen-val/src/solutions
           dotnet restore --no-cache
       - name: Create output directory
         run: mkdir -p ./output
