@@ -27,8 +27,6 @@ jobs:
           
   acvts_validation:
     runs-on: ubuntu-latest
-    # Upgraded from dotnet/sdk:6.0 (EOL) to 8.0 (LTS) — required for
-    # NuGet package resolution against josephlukefahr/ACVP-Server@jwl/versions-in-some-packages
     container: mcr.microsoft.com/dotnet/sdk:8.0
     steps:
       - name: Checkout pqc-certificates
@@ -44,9 +42,7 @@ jobs:
       - name: Install zip/unzip
         run: apt update && apt install -y zip unzip
       - name: Restore NuGet packages
-        run: |
-          cd ./ACVP-Server/gen-val/src/solutions
-          dotnet restore --no-cache
+        run: dotnet restore ./ACVP-Server/gen-val/src/solutions/all/All.sln --no-cache
       - name: Create output directory
         run: mkdir -p ./output
       - name: Run ACVTS certificate tests
