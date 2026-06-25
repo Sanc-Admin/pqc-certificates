@@ -41,10 +41,11 @@ jobs:
           path: ./ACVP-Server
       - name: Install zip/unzip
         run: apt update && apt install -y zip unzip
-      - name: Patch Orleans.ServerHost TargetFramework net6.0 -> net8.0
+      - name: Patch all csproj TargetFramework net6.0 -> net8.0
         run: |
-          sed -i 's|<TargetFramework>net6.0</TargetFramework>|<TargetFramework>net8.0</TargetFramework>|g' \
-            ./ACVP-Server/gen-val/samples/NIST.CVP.ACVTS.Orleans.ServerHost/NIST.CVP.ACVTS.Orleans.ServerHost.csproj
+          find ./ACVP-Server -name '*.csproj' | xargs sed -i \
+            's|<TargetFramework>net6\.0</TargetFramework>|<TargetFramework>net8.0</TargetFramework>|g;
+             s|<TargetFrameworks>\([^<]*\)net6\.0\([^<]*\)</TargetFrameworks>|<TargetFrameworks>\1net8.0\2</TargetFrameworks>|g'
       - name: Restore NuGet packages
         run: >
           dotnet restore
