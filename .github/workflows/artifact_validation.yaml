@@ -4,8 +4,6 @@ on:
   push:
     branches: [ '*' ]
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -50,12 +48,21 @@ jobs:
               "$f"
           done
           echo "TFM patch complete."
+      - name: Debug - show all TargetFramework values after patch
+        run: |
+          echo "=== All TargetFramework values in csproj files ==="
+          grep -r --include="*.csproj" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
+          echo "=== Any TargetFramework in .props files ==="
+          grep -r --include="*.props" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
+          echo "=== Any TargetFramework in .targets files ==="
+          grep -r --include="*.targets" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
       - name: Restore NuGet packages
         run: >
           dotnet restore
           ./ACVP-Server/gen-val/src/solutions/all/All.sln
           --no-cache
           -p:BuildGenValPackages=false
+          -v:detailed
       - name: Create output directory
         run: mkdir -p ./output
       - name: Run ACVTS certificate tests
