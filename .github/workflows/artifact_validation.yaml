@@ -37,32 +37,24 @@ jobs:
           repository: josephlukefahr/ACVP-Server
           ref: jwl/versions-in-some-packages
           path: ./ACVP-Server
-      - name: Install zip/unzip
-        run: apt update && apt install -y zip unzip
+      - name: Install zip/unzip/dos2unix
+        run: apt update && apt install -y zip unzip dos2unix
       - name: Patch all csproj TargetFramework(s) to net8.0
         run: |
           find ./ACVP-Server -name '*.csproj' | while read f; do
+            dos2unix "$f" 2>/dev/null
             sed -i \
               -e 's|<TargetFramework>[^<]*</TargetFramework>|<TargetFramework>net8.0</TargetFramework>|g' \
               -e 's|<TargetFrameworks>[^<]*</TargetFrameworks>|<TargetFrameworks>net8.0</TargetFrameworks>|g' \
               "$f"
           done
           echo "TFM patch complete."
-      - name: Debug - show all TargetFramework values after patch
-        run: |
-          echo "=== All TargetFramework values in csproj files ==="
-          grep -r --include="*.csproj" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
-          echo "=== Any TargetFramework in .props files ==="
-          grep -r --include="*.props" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
-          echo "=== Any TargetFramework in .targets files ==="
-          grep -r --include="*.targets" -H "TargetFramework" ./ACVP-Server || echo "(none found)"
       - name: Restore NuGet packages
         run: >
           dotnet restore
           ./ACVP-Server/gen-val/src/solutions/all/All.sln
           --no-cache
           -p:BuildGenValPackages=false
-          -v:detailed
       - name: Create output directory
         run: mkdir -p ./output
       - name: Run ACVTS certificate tests
