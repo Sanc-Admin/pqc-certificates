@@ -37,18 +37,19 @@ jobs:
           repository: josephlukefahr/ACVP-Server
           ref: jwl/versions-in-some-packages
           path: ./ACVP-Server
-      - name: Install zip/unzip/dos2unix
-        run: apt update && apt install -y zip unzip dos2unix
-      - name: Patch all csproj TargetFramework(s) to net8.0
+      - name: Install zip/unzip
+        run: apt update && apt install -y zip unzip
+      - name: Write Directory.Build.props to force net8.0
         run: |
-          find ./ACVP-Server -name '*.csproj' | while read f; do
-            dos2unix "$f" 2>/dev/null
-            sed -i \
-              -e 's|<TargetFramework>[^<]*</TargetFramework>|<TargetFramework>net8.0</TargetFramework>|g' \
-              -e 's|<TargetFrameworks>[^<]*</TargetFrameworks>|<TargetFrameworks>net8.0</TargetFrameworks>|g' \
-              "$f"
-          done
-          echo "TFM patch complete."
+          cat > ./ACVP-Server/gen-val/Directory.Build.props <<'EOF'
+          <Project>
+            <PropertyGroup>
+              <TargetFramework>net8.0</TargetFramework>
+              <TargetFrameworks></TargetFrameworks>
+            </PropertyGroup>
+          </Project>
+          EOF
+          echo "Directory.Build.props written."
       - name: Restore NuGet packages
         run: >
           dotnet restore
