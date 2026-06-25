@@ -42,7 +42,11 @@ jobs:
       - name: Install zip/unzip
         run: apt update && apt install -y zip unzip
       - name: Restore NuGet packages
-        run: dotnet restore ./ACVP-Server/gen-val/src/solutions/all/All.sln --no-cache
+        run: >
+          dotnet restore
+          ./ACVP-Server/gen-val/src/solutions/all/All.sln
+          --no-cache
+          -p:BuildGenValPackages=false
       - name: Create output directory
         run: mkdir -p ./output
       - name: Run ACVTS certificate tests
