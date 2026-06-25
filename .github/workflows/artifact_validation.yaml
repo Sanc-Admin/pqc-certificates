@@ -41,11 +41,29 @@ jobs:
           path: ./ACVP-Server
       - name: Install zip/unzip
         run: apt update && apt install -y zip unzip
-      - name: Patch all csproj TargetFramework net6.0 -> net8.0
+      - name: Patch all csproj TargetFramework(s) to net8.0
         run: |
-          find ./ACVP-Server -name '*.csproj' | xargs sed -i \
-            's|<TargetFramework>net6\.0</TargetFramework>|<TargetFramework>net8.0</TargetFramework>|g;
-             s|<TargetFrameworks>\([^<]*\)net6\.0\([^<]*\)</TargetFrameworks>|<TargetFrameworks>\1net8.0\2</TargetFrameworks>|g'
+          python3 - <<'EOF'
+          import os, re, pathlib
+
+          root = pathlib.Path("./ACVP-Server")
+          tfm_single = re.compile(r'(<TargetFramework>)[^<]*(</TargetFramework>)')
+          tfm_multi  = re.compile(r'(<TargetFrameworks>)[^<]*(</TargetFrameworks>)')
+
+          patched = []
+          for csproj in root.rglob("*.csproj"):
+              text = csproj.read_text(encoding="utf-8")
+              new  = tfm_single.sub(r'\1net8.0\2', text)
+              # For multi-TFM projects keep net8.0 only (replaces the whole list)
+              new  = tfm_multi.sub(r'\1net8.0\2', new)
+              if new != text:
+                  csproj.write_text(new, encoding="utf-8")
+                  patched.append(str(csproj))
+
+          print(f"Patched {len(patched)} file(s):")
+          for p in patched:
+              print(" ", p)
+          EOF
       - name: Restore NuGet packages
         run: >
           dotnet restore
