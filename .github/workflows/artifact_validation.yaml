@@ -1,80 +1,175 @@
 name: Artifact validation
 
 on:
+  pull_request:
   push:
     branches: [ '*' ]
 
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
   cancel-in-progress: false
-  
+
 jobs:
-  oqs_validation:
+  bc_validation:
     runs-on: ubuntu-latest
-    container: openquantumsafe/oqs-ossl3
+    container: bcdocker2000/bc_hackathon_pqc
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Test artifacts with OQS
-        run: ./src/test_certs_r3_with_oqs.sh
+      - name: Test artifacts with BC
+        run: ./src/test_certs_r5.sh bc
       - name: Save artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Compatibility_oqs_csv
+          name: Compatibility_bc_csv
           path: ./output/
-          
+
+  openssl_cert_validation:
+    runs-on: ubuntu-latest
+    container: fedora:43
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install OpenSSL 3.5
+        run: dnf -y install zip diff openssl
+      - name: Test artifacts with OpenSSL 3.5
+        run: ./src/test_certs_r5_openssl.sh
+      - name: Save artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Compatibility_openssl_csv
+          path: ./output/
+
+  openssl_cms_validation:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install OpenSSL 3.6
+        run: |
+            apt update
+            apt install -y zip gnupg
+            apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 6ED0E7B82643E131
+            echo "deb http://deb.debian.org/debian experimental main" > /etc/apt/sources.list
+            apt update
+            apt install -y openssl
+      - name: Test CMS artifacts with OpenSSL 3.6
+        run: ./src/test_cms_v3_openssl.sh
+      - name: Save artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Compatibility_openssl36_csv
+          path: ./output/
+
+  composite_ref_impl_validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install python requirements of pqc-certificates
+        run: python -m pip install -r src/requirements.txt
+      - name: Clone composite sigs ref impl repo
+        uses: actions/checkout@v4
+        with:
+          repository: lamps-wg/draft-composite-sigs
+          path: ./draft-composite-sigs
+      - name: Install python requirements of composite-sigs
+        run: python -m pip install -r ./draft-composite-sigs/src/requirements.txt
+      - name: Test artifacts with composite Sigs reference implementation
+        run: |
+            shopt -s globstar
+            for i in **/artifacts_certs_r5.zip; do ./draft-composite-sigs/src/test_artifacts_r5.py "$(basename $(dirname "$i"))" "$i" | tee -a composite-sigs-ref-impl.log; done;
+      - name: Clone composite kem ref impl repo
+        uses: actions/checkout@v4
+        with:
+          repository: lamps-wg/draft-composite-kem
+          path: ./draft-composite-kem
+      - name: Install python requirements of composite-kem
+        run: python -m pip install -r ./draft-composite-kem/src/requirements.txt
+      - name: Test artifacts with composite KEM reference implementation
+        run: |
+            shopt -s globstar
+            for i in **/artifacts_certs_r5.zip; do ./draft-composite-kem/src/test_artifacts_r5.py "$(basename $(dirname "$i"))" "$i" | tee -a composite-kem-ref-impl.log; done;
+      - name: Copy logs to output
+        run: |
+            mkdir -p ./output/certs
+            cp composite-sigs-ref-impl.log ./output/certs/
+            cp composite-kem-ref-impl.log ./output/certs/
+      - name: Save artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Compatibility_composite-refl-impl_csv
+          path: ./output/
+
   acvts_validation:
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/dotnet/sdk:8.0
+    container: mcr.microsoft.com/dotnet/sdk:6.0
     steps:
       - name: Checkout pqc-certificates
         uses: actions/checkout@v4
         with:
           path: ./pqc-certificates
-      - name: Checkout ACVP-Server (jwl/versions-in-some-packages)
+
+      # Check out the official NIST ACVP-Server repo (not a personal fork).
+      # The version lower-bound fix from josephlukefahr/ACVP-Server@jwl/versions-in-some-packages
+      # is applied inline below via sed so we have zero unmerged fork dependencies.
+      - name: Checkout ACVP-Server (official NIST repo)
         uses: actions/checkout@v4
         with:
-          repository: josephlukefahr/ACVP-Server
-          ref: jwl/versions-in-some-packages
+          repository: usnistgov/ACVP-Server
+          ref: master
           path: ./ACVP-Server
-      - name: Install zip/unzip
-        run: apt update && apt install -y zip unzip
-      - name: Write Directory.Build.props to force net8.0
+
+      # Patch: add minimum version lower bounds to NuGet central package management.
+      # Without this, dotnet restore resolves inconsistent transitive versions and
+      # compilation fails (the root cause of the original fork dependency).
+      - name: Patch ACVP-Server version bounds
         run: |
-          cat > ./ACVP-Server/gen-val/Directory.Build.props <<'EOF'
-          <Project>
-            <PropertyGroup>
-              <TargetFramework>net8.0</TargetFramework>
-              <TargetFrameworks></TargetFrameworks>
-            </PropertyGroup>
-          </Project>
-          EOF
-          echo "Directory.Build.props written."
-      - name: Restore NuGet packages
-        run: >
-          dotnet restore
-          ./ACVP-Server/gen-val/src/solutions/all/All.sln
-          --no-cache
-          -p:BuildGenValPackages=false
-      - name: Create output directory
+          PROPS="./ACVP-Server/Directory.Packages.props"
+          if [ -f "$PROPS" ]; then
+            # Add [min,) lower bound to any PackageVersion entries that have no lower bound
+            # This mirrors the fix in josephlukefahr's fork branch
+            sed -i -E 's|(<PackageVersion Include="[^"]+" Version=")([0-9]+\.[0-9]+\.[0-9]+)(" */>)$|\1[\2,)\3|g' "$PROPS" || true
+          fi
+
+      - name: Install zip/unzip
+        run: apt-get update && apt-get install -y zip unzip
+
+      - name: Pre-build nist-acvts-verifier
+        run: |
+          dotnet restore ./pqc-certificates/src/nist-acvts-verifier/nist-acvts-verifier.csproj \
+            -p:BuildGenValPackages=false
+          dotnet build ./pqc-certificates/src/nist-acvts-verifier/nist-acvts-verifier.csproj \
+            -p:BuildGenValPackages=false --no-restore
+
+      - name: Create output dir
         run: mkdir -p ./output
-      - name: Run ACVTS certificate tests
-        run: /bin/bash ./pqc-certificates/src/test_certs_r3_with_acvts.sh ./pqc-certificates
+
+      - name: Test r3 artifacts with ACVTS verifier
+        run: /bin/bash ./pqc-certificates/src/test_certs_r3_with_acvts.sh ./pqc-certificates ./ACVP-Server
+
       - name: Save artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Compatibility_acvts_csv
           path: ./output
-          
+
   build_results_html:
     runs-on: ubuntu-latest
     container: ubuntu:latest
-    needs: [oqs_validation, acvts_validation]
+    needs: [bc_validation, openssl_cert_validation, openssl_cms_validation, composite_ref_impl_validation, acvts_validation]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install packages
-        run: | 
+        run: |
           apt-get update && \
           apt-get install -y pandoc lsb-release
       - name: Install Python
@@ -83,22 +178,43 @@ jobs:
           python-version: '3.x'
       - name: Install python requirements
         run: python -m pip install -r src/requirements.txt
-      - name: Get OQS results from previous job
+      - name: Get BC results from previous job
         uses: actions/download-artifact@v4
-        with: 
-          name: Compatibility_oqs_csv
+        with:
+          name: Compatibility_bc_csv
           path: output/
-      - name: Get acvts results from previous job
+      - name: Get OpenSSL results from previous job
         uses: actions/download-artifact@v4
-        with: 
+        with:
+          name: Compatibility_openssl_csv
+          path: output/
+      - name: Get OpenSSL 3.6 results from previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: Compatibility_openssl36_csv
+          path: output/
+      - name: Get RefImpl results from previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: Compatibility_composite-refl-impl_csv
+          path: output/
+      - name: Get ACVTS results from previous job
+        uses: actions/download-artifact@v4
+        with:
           name: Compatibility_acvts_csv
           path: output/
-      - name: Build compat matrix (r3)
-        run: ./src/rebuild_results_certs_r3.sh
-      - name: Build compat matrix (r4)
-        run: ./src/rebuild_results_certs_r4.sh
-      - name: Copy output files
-        run: mv ./docs/pqc_hackathon_results_certs_r3.html ./docs/pqc_hackathon_results_certs_r3_automated_tests.html ./docs/pqc_hackathon_results_certs_r4.html ./docs/pqc_hackathon_results_cms_v1.html ./output/certs/oqs_certs.log ./output/certs/bc_certs.log ./docs/gh-pages
+      - name: Build compat matrix (certs_r5)
+        run: ./src/rebuild_results_certs_r5.sh
+      - name: Build compat matrix (cms_v3)
+        run: ./src/rebuild_results_cms_v3.sh
+      - name: Copy output files (automated certs_r5)
+        run: cp ./docs/pqc_hackathon_results_certs_r5_automated_tests.html ./output/certs/bc_certs.log ./output/certs/openssl_certs.log ./output/certs/composite-sigs-ref-impl.log ./output/certs/composite-kem-ref-impl.log ./output/cms/openssl_cms.log ./docs/gh-pages
+      - name: Copy output files (automated cms_v3)
+        run: cp ./docs/pqc_hackathon_results_cms_v3_automated_tests.html ./output/cms/openssl_cms.log ./docs/gh-pages
+      - name: Copy output files (manual r5/v1)
+        run: cp ./docs/pqc_hackathon_results_certs_r5.html ./docs/pqc_hackathon_results_cms_v1.html ./docs/gh-pages
+      - name: Copy output files (manual r5/v3)
+        run: cp ./docs/pqc_hackathon_results_certs_r5.html ./docs/pqc_hackathon_results_cms_v3.html ./docs/gh-pages
       - name: Archive Compatibility Matrix For Download
         uses:  actions/upload-pages-artifact@v3
         with:

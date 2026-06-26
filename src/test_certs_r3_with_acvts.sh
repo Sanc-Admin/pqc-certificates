@@ -29,6 +29,15 @@ supported_OIDs_json="$pqcCertsDir/src/nist-acvts-verifier/supported_oids.json"
 mkdir -p $outputdir
 printf "Build time: %s\n\n" "$(date)" > $logfile
 
+# Pre-build the verifier once before the cert loop.
+# BuildGenValPackages=false MUST be an MSBuild property (-p:), NOT a shell env-var
+# prefix to dotnet run (where it is silently ignored by the runtime).
+echo "Pre-building nist-acvts-verifier..." | tee -a $logfile
+dotnet restore "$pqcCertsDir/src/nist-acvts-verifier/nist-acvts-verifier.csproj" \
+    -p:BuildGenValPackages=false 2>&1 | tee -a $logfile
+dotnet build "$pqcCertsDir/src/nist-acvts-verifier/nist-acvts-verifier.csproj" \
+    -p:BuildGenValPackages=false --no-restore 2>&1 | tee -a $logfile
+
 alreadyTestedOIDs=";"
 
 
@@ -52,31 +61,35 @@ test_ta () {
 
     # some artifacts submit multiple copies of the same cert as .pem, .der, etc. Just skip the second one
     if [[ $(expr match "$alreadyTestedOIDs" ".*\;$oid\;.*") != 0 ]]; then
-        printf "Warning: %s has been submitted multiple times by this provider. Skipping\n" $oid 
+        printf "Warning: %s has been submitted multiple times by this provider. Skipping\n" $oid
         return
     fi
 
     alreadyTestedOIDs=${alreadyTestedOIDs}$oid";"
 
-    # The actual test command that is the heart of this script
-    printf "Testing %s\n" $tafile |tee -a $logfile
-    # Usage: dotnet run <expected-file-type: pem|der> <path-to-file>
-    test_output=$(BuildGenValPackages=false dotnet run --project $pqcCertsDir/src/nist-acvts-verifier -- pem $tafile)
+    # The actual test command that is the heart of this script.
+    # --no-build: skip recompile since we pre-built above.
+    # -p:BuildGenValPackages=false: MSBuild property (NOT a shell env-var prefix).
+    printf "Testing %s\n" $tafile | tee -a $logfile
+    test_output=$(dotnet run \
+        --project "$pqcCertsDir/src/nist-acvts-verifier" \
+        --no-build \
+        -p:BuildGenValPackages=false \
+        -- pem "$tafile" 2>&1)
     test_status=$?
 
     # log it to file and to stdout
-    echo "$test_output" |tee -a $logfile
-
+    echo "$test_output" | tee -a $logfile
 
     # test for an error and print a link in the results CSV file
     if [[ $test_status -eq 1 ]]; then
-        echo "Certificate Validation Result: FAIL" |tee -a $logfile
+        echo "Certificate Validation Result: FAIL" | tee -a $logfile
         echo $oid,N >> $resultsfile
     elif [[ $test_status -eq 0 ]]; then
-        echo "Certificate Validation Result: SUCCESS" |tee -a $logfile
+        echo "Certificate Validation Result: SUCCESS" | tee -a $logfile
         echo $oid,Y >> $resultsfile
     else
-        echo "Certificate could not be validated" |tee -a $logfile
+        echo "Certificate could not be validated" | tee -a $logfile
     fi
 }
 
@@ -99,7 +112,7 @@ for providerdir in $(ls -d $inputdir/*/); do
     resultsfile=${outputdir}/${provider}_nist-acvts-verifier.csv
     echo "key_algorithm_oid,test_result" > $resultsfile  # CSV header row
 
-    alreadyTestedOIDs=";"  # for a guard to skip testing the same cert multiple times
+    alreadyTestedOIDs=";"  # guard to skip testing the same cert multiple times
     # test each TA file
     for tafile in $(find $unzipdir \( -iname "*_ta.pem" -o -iname "*_ta.der.pem" \)); do
         test_ta "$tafile" "$resultsfile"
